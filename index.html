@@ -361,23 +361,49 @@ async function doConnect(){
 
 '+
         (S.useProxy
-          ? 'Verificá que el Worker de Cloudflare este activo
-const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;
-  a.download=`${title.replace(/\s+/g,'_')}.doc`;
+         : 'Verificá que el Worker de Cloudflare esté activo y que la URL del proxy sea correcta.')
+      );
+    }
+  } catch (e) {
+    showErr(e.message);
+    busy('connect', false);
+  }
+}
+
+// --- FUNCIONES DE EXPORTACIÓN Y UTILIDAD ---
+
+function doExportWord() {
+  const content = document.getElementById('analysis-result').innerText;
+  const title = document.getElementById('analysis-title').innerText || 'Analisis_Campus';
+  const date = new Date().toLocaleString('es-AR');
+  const esc2 = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  
+  const body = content.split(/\n\n+/).map(p => {
+    const t = p.trim(); if (!t) return '';
+    if (t.startsWith('===') && t.endsWith('===')) return `<h2>${esc2(t.replace(/=/g, '').trim())}</h2>`;
+    return `<p>${esc2(t)}</p>`;
+  }).join('\n');
+
+  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${esc2(title)}</title><style>body{font-family:Arial,sans-serif;font-size:12pt;margin:2cm}h1{font-size:18pt;color:#1a1a2e;border-bottom:2px solid #4a90d9;padding-bottom:8px}h2{font-size:14pt;color:#4a90d9;margin-top:20px}p{line-height:1.6;margin-bottom:10px}.meta{color:#666;font-size:10pt}</style></head><body><h1>${esc2(title)}</h1><p class="meta">Generado: ${date} | Campus Bot UNMA</p>${body}</body></html>`;
+  
+  const blob = new Blob([html], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title.replace(/\s+/g, '_')}.doc`;
   a.click();
   URL.revokeObjectURL(url);
   toast('📄 Descargando Word...');
-  log('Word exportado','success');
+  log('Word exportado', 'success');
 }
 
-// FUNCIONES DE UTILIDAD
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
-// ACTIVACIÓN INICIAL
+// Carga inicial y activación
 loadConf();
-log('Campus Bot listo. Ingresá tus credenciales en Config.','accent');
+log('Campus Bot listo. Ingresá tus credenciales en Config.', 'accent');
 
 </script>
 </body>
