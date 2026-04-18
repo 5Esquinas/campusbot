@@ -619,6 +619,17 @@ function doExportWord(){
   a.href=url;a.download='CampusBot_'+title.slice(0,20).replace(/[^a-zA-Z0-9]/g,'_')+'_'+date.replace(/\//g,'')+'.doc';
   a.click();URL.revokeObjectURL(url);
   toast('📄 Descargando Word...');log('Word exportado','success');
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  loadConf();
+  log('Campus Bot listo. Ingresá tus credenciales en Config.', 'accent');
+</script>
+</body>
+</html>
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
