@@ -125,6 +125,14 @@ nav::-webkit-scrollbar{display:none}
       Obtené en <b style="color:var(--accent)">platform.openai.com/api-keys</b>
     </div>
   </div>
+  <div class="card">
+    <div class="card-title">🌐 Proxy URL (Cloudflare Worker)</div>
+    <div class="field"><input id="proxy" type="url" placeholder="https://campus-proxy.tuusuario.workers.dev" autocomplete="off"></div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-top:-4px">
+      Necesario para conectarse al campus desde el celular.<br>
+      Seguí las instrucciones del archivo <b>worker.js</b> para crearlo gratis.
+    </div>
+  </div>
   <div class="btn-row">
     <button class="btn btn-primary" onclick="doConnect()">
       <div id="sp-connect" class="spinner"></div><span id="lb-connect">Conectar</span>
@@ -225,7 +233,47 @@ nav::-webkit-scrollbar{display:none}
 <div id="toast"></div>
 
 <script>
-const S={connected:false,base:'https://campus.unma.net.ar/c0',courses:[],items:[],sel:new Set(),extracted:'',analysis:''};
+const S={
+  connected:false,
+  base:'https://campus.unma.net.ar/c0',
+  // Proxy Cloudflare Worker — cambiá por tu URL después de deployar
+  proxy:'https://campus-proxy.TU-USUARIO.workers.dev',
+  useProxy:true,   // false = intento directo (puede fallar por CORS)
+  cookie:'',       // sesión Moodle guardada manualmente
+  courses:[],items:[],sel:new Set(),extracted:'',analysis:''
+};
+
+// Fetch con proxy — maneja CORS y cookies de Moodle
+async function pfetch(url, opts={}) {
+  if (!S.useProxy) {
+    return fetch(url, {...opts, credentials:'include'});
+  }
+  const headers = new Headers(opts.headers || {});
+  headers.set('x-target-url', url);
+  headers.set('Content-Type', opts.headers?.['Content-Type'] || 'text/html');
+  if (S.cookie) headers.set('x-campus-cookie', S.cookie);
+  if (opts.body) headers.set('Content-Type', 'application/x-www-form-urlencoded');
+
+  const resp = await fetch(S.proxy, {
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body,
+  });
+
+  // Guardar cookie de sesión si viene en la respuesta
+  const setCookie = resp.headers.get('x-set-cookie');
+  if (setCookie) {
+    // Extraer MoodleSession cookie
+    const match = setCookie.match(/MoodleSession[^=]*=([^;]+)/);
+    if (match) {
+      const name = setCookie.match(/(MoodleSession[^=]*)/)?.[1] || 'MoodleSession';
+      S.cookie = (S.cookie ? S.cookie.replace(/MoodleSession[^;]*(;\s*)?/g,'') + '; ' : '') + name + '=' + match[1];
+      localStorage.setItem('cb_cookie', S.cookie);
+      log('Cookie de sesión guardada', 'info');
+    }
+  }
+  return resp;
+}
 
 function go(id){
   document.querySelectorAll('.tab').forEach((t,i)=>{const ids=['config','campus','content','analyze','log'];t.classList.toggle('active',ids[i]===id)});
@@ -246,8 +294,14 @@ function clearLog(){document.getElementById('log-box').textContent='Log limpiado
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)}
 
-function saveConf(){localStorage.setItem('cbu',document.getElementById('u').value);localStorage.setItem('cbk',document.getElementById('k').value)}
-function loadConf(){const u=localStorage.getItem('cbu'),k=localStorage.getItem('cbk');if(u)document.getElementById('u').value=u;if(k)document.getElementById('k').value=k}
+function saveConf(){localStorage.setItem('cbu',document.getElementById('u').value);localStorage.setItem('cbk',document.getElementById('k').value);const px=document.getElementById('proxy').value.trim();if(px){localStorage.setItem('cbp',px);S.proxy=px;}}
+function loadConf(){
+  const u=localStorage.getItem('cbu'),k=localStorage.getItem('cbk'),p=localStorage.getItem('cbp'),c=localStorage.getItem('cb_cookie');
+  if(u)document.getElementById('u').value=u;
+  if(k)document.getElementById('k').value=k;
+  if(p){document.getElementById('proxy').value=p;S.proxy=p;}
+  if(c)S.cookie=c;
+}
 
 function busy(id,on){
   document.getElementById('sp-'+id).classList.toggle('on',on);
@@ -263,20 +317,30 @@ async function doConnect(){
   const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value,k=document.getElementById('k').value.trim();
   if(!u||!p){toast('Ingresá usuario y contraseña');return}
   if(!k){toast('Ingresá tu API key de OpenAI');return}
+  const px=document.getElementById('proxy').value.trim();
+  if(px){S.proxy=px;localStorage.setItem('cbp',px);}
+  if(!S.proxy||S.proxy.includes('TU-USUARIO')){
+    toast('⚠️ Configurá la URL del proxy primero');
+    // Try direct (may fail due to CORS)
+    S.useProxy=false;
+    log('Intentando conexión directa (puede fallar por CORS)...','warning');
+  } else {
+    S.useProxy=true;
+  }
   busy('connect',true);log('Conectando al campus...','accent');
   try{
     // login
-    const r1=await fetch(`${S.base}/login/index.php`,{credentials:'include'});
+    const r1=await pfetch(`${S.base}/login/index.php`);
     const h1=await r1.text();
     const tm=h1.match(/name="logintoken"\s+value="([^"]+)"/);
     const tok=tm?tm[1]:'';
     const body=new URLSearchParams({username:u,password:p,logintoken:tok,anchor:''});
-    const r2=await fetch(`${S.base}/login/index.php`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString(),credentials:'include',redirect:'follow'});
+    const r2=await pfetch(`${S.base}/login/index.php`,{method:'POST',body:body.toString()});
     const h2=await r2.text();
     if(h2.includes('loginerrors')||h2.includes('error-invalidlogin'))throw new Error('Credenciales incorrectas');
     log('Sesión iniciada','success');
     // cursos
-    const r3=await fetch(`${S.base}/my/`,{credentials:'include'});
+    const r3=await pfetch(`${S.base}/my/`);
     const h3=await r3.text();
     const doc=new DOMParser().parseFromString(h3,'text/html');
     const links=doc.querySelectorAll('a[href*="/course/view.php"]');
@@ -350,7 +414,7 @@ async function doExplore(){
   document.getElementById('exp-st').textContent='Cargando '+course.name+'...';
   log('Explorando: '+course.name,'accent');
   try{
-    const r=await fetch(course.url,{credentials:'include'});
+    const r=await pfetch(course.url);
     const h=await r.text();
     const doc=new DOMParser().parseFromString(h,'text/html');
     const isTiles=h.includes('tile-clickable')||h.includes('format-tiles');
@@ -396,7 +460,7 @@ async function getTiles(courseUrl,doc,html){
     log('Cargando: '+name,'info');
     const url=courseUrl+(courseUrl.includes('?')?'&':'?')+'section='+secNum;
     try{
-      const r=await fetch(url,{credentials:'include'});
+      const r=await pfetch(url);
       const h=await r.text();
       const d=new DOMParser().parseFromString(h,'text/html');
       const sec=d.querySelector('#section-'+secNum+',li[data-section="'+secNum+'"]');
@@ -460,7 +524,7 @@ async function doExtract(){
 
 async function extractItem(item){
   if(!item.url)return'';
-  const r=await fetch(item.url,{credentials:'include'});
+  const r=await pfetch(item.url);
   const h=await r.text();
   const doc=new DOMParser().parseFromString(h,'text/html');
   if(item.type==='forum'||item.type==='hsuforum')return await extForum(doc,item.type);
@@ -472,7 +536,7 @@ async function extForum(doc,type){
   log('  📌 '+links.length+' temas','info');const texts=[];
   for(let i=0;i<Math.min(links.length,15);i++){
     try{
-      const r=await fetch(links[i],{credentials:'include'});
+      const r=await pfetch(links[i]);
       const h=await r.text();const d=new DOMParser().parseFromString(h,'text/html');
       const sels=['.forumpost .posting','div[data-region="post-content"]','.post-content-container','article.forum-post-container','.forumpost'];
       let found=false;

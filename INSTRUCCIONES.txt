@@ -1,0 +1,49 @@
+═══════════════════════════════════════════════════════════
+  CAMPUS BOT ANDROID — Instrucciones de instalación
+  Universidad UNMA
+═══════════════════════════════════════════════════════════
+
+PASO 1 — Crear el Proxy Cloudflare (gratis, 5 minutos)
+────────────────────────────────────────────────────────
+El proxy es necesario para que el celular pueda hablar
+con el campus Moodle (política de seguridad del campus).
+
+1. Creá cuenta gratis en: https://workers.cloudflare.com
+2. Dashboard → Workers & Pages → "Create application"
+3. Clic en "Create Worker" → dale nombre: "campus-proxy"
+4. Clic en "Edit code"
+5. Borrá todo el código que aparece
+6. Pegá el contenido del archivo worker.js
+7. En la línea: ALLOWED_ORIGINS = [...]
+   Cambiá 'https://tegralan.github.io' por tu URL de GitHub Pages
+8. Clic en "Save and deploy"
+9. Copiá la URL que te da (ej: campus-proxy.tuusuario.workers.dev)
+
+PASO 2 — Subir la app a GitHub Pages
+────────────────────────────────────────────────────────
+1. Creá repositorio "campus-bot" en github.com
+2. Subí: index.html, manifest.json, sw.js
+3. Settings → Pages → Branch: main → Save
+4. URL: tuusuario.github.io/campus-bot
+
+PASO 3 — Instalar en el celular
+────────────────────────────────────────────────────────
+1. Abrí Chrome en el celular
+2. Navegá a tu URL de GitHub Pages
+3. Menú (⋮) → "Agregar a pantalla de inicio"
+4. ¡Aparece como app!
+
+PASO 4 — Configurar la app
+────────────────────────────────────────────────────────
+En la pantalla "Config":
+1. Usuario: tu usuario del campus UNMA
+2. Contraseña: tu contraseña del campus
+3. API Key: tu key de OpenAI (sk-...)
+4. Proxy URL: la URL del Worker de Cloudflare
+5. Tocá "Conectar"
+
+PLAN GRATUITO DE CLOUDFLARE:
+────────────────────────────────────────────────────────
+100,000 requests/día — más que suficiente para uso personal.
+
+═══════════════════════════════════════════════════════════
