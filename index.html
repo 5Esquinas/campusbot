@@ -139,11 +139,6 @@ nav::-webkit-scrollbar{display:none}
     </button>
     <button class="btn btn-red" id="disc-btn" onclick="doDisconnect()" disabled>Salir</button>
   </div>
-  <div id="err-box" style="display:none;background:#1a0a0a;border:1px solid var(--red);border-radius:var(--r-sm);padding:14px;margin-top:4px">
-    <div style="font-size:11px;color:var(--red);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">❌ Error de conexión</div>
-    <div id="err-msg" style="font-family:var(--mono);font-size:12px;color:#fca5a5;line-height:1.7;white-space:pre-wrap;word-break:break-all"></div>
-    <div style="margin-top:10px;font-size:11px;color:var(--text2)">Tocá el ícono 📝 Log para ver el detalle completo.</div>
-  </div>
   <div class="card" id="conn-info" style="display:none">
     <div class="card-title">✅ Conectado</div>
     <div class="info-row"><span class="lbl">Usuario</span><span id="inf-u">—</span></div>
@@ -318,93 +313,315 @@ function busy(id,on){
 }
 
 // ── Moodle ──
-function showErr(msg){
-  document.getElementById('err-box').style.display='';
-  document.getElementById('err-msg').textContent=msg;
-}
-function hideErr(){document.getElementById('err-box').style.display='none'}
-
 async function doConnect(){
-  hideErr();
-  const u=document.getElementById('u').value.trim();
-  const p=document.getElementById('p').value;
-  const k=document.getElementById('k').value.trim();
-  const proxyInput=document.getElementById('proxy').value.trim();
-
-  if(!u||!p){showErr('Falta usuario o contrasena.');return}
-  if(!k){showErr('Falta la API key de OpenAI.');return}
-
-  if(proxyInput&&!proxyInput.includes('TU-USUARIO')){
-    S.proxy=proxyInput;S.useProxy=true;
-    localStorage.setItem('cbp',proxyInput);
-    log('Proxy configurado: '+proxyInput,'info');
-  } else {
+  const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value,k=document.getElementById('k').value.trim();
+  if(!u||!p){toast('Ingresá usuario y contraseña');return}
+  if(!k){toast('Ingresá tu API key de OpenAI');return}
+  const px=document.getElementById('proxy').value.trim();
+  if(px){S.proxy=px;localStorage.setItem('cbp',px);}
+  if(!S.proxy||S.proxy.includes('TU-USUARIO')){
+    toast('⚠️ Configurá la URL del proxy primero');
+    // Try direct (may fail due to CORS)
     S.useProxy=false;
-    log('Sin proxy - intento directo (puede fallar por CORS)','warning');
+    log('Intentando conexión directa (puede fallar por CORS)...','warning');
+  } else {
+    S.useProxy=true;
   }
-
-  busy('connect',true);
-  log('=== Iniciando conexion ===','accent');
-
+  busy('connect',true);log('Conectando al campus...','accent');
   try{
-    // PASO 1: Login page
-    log('Paso 1/3: Obteniendo pagina de login...','info');
-    let r1;
+    // login
+    const r1=await pfetch(`${S.base}/login/index.php`);
+    const h1=await r1.text();
+    const tm=h1.match(/name="logintoken"\s+value="([^"]+)"/);
+    const tok=tm?tm[1]:'';
+    const body=new URLSearchParams({username:u,password:p,logintoken:tok,anchor:''});
+    const r2=await pfetch(`${S.base}/login/index.php`,{method:'POST',body:body.toString()});
+    const h2=await r2.text();
+    if(h2.includes('loginerrors')||h2.includes('error-invalidlogin'))throw new Error('Credenciales incorrectas');
+    log('Sesión iniciada','success');
+    // cursos
+    const r3=await pfetch(`${S.base}/my/`);
+    const h3=await r3.text();
+    const doc=new DOMParser().parseFromString(h3,'text/html');
+    const links=doc.querySelectorAll('a[href*="/course/view.php"]');
+    S.courses=[];const seen=new Set();
+    links.forEach(a=>{const href=a.href,name=a.textContent.trim();if(href&&name&&!seen.has(href)&&name.length>2){seen.add(href);S.courses.push({name,url:href})}});
+    S.connected=true;saveConf();
+    // UI
+    document.getElementById('status-dot').classList.add('on');
+    document.getElementById('st-txt').textContent=u;
+    document.getElementById('conn-info').style.display='';
+    document.getElementById('inf-u').textContent=u;
+    document.getElementById('inf-c').textContent=S.courses.length;
+    document.getElementById('disc-btn').disabled=false;
+    const sel=document.getElementById('course-sel');
+    sel.innerHTML=S.courses.map(c=>`<option value="${esc(c.url)}">${esc(c.name)}</option>`).join('');
+    document.getElementById('exp-btn').disabled=false;
+    log(`${S.courses.length} materias encontradas`,'success');
+    toast(`✅ ${S.courses.length} materias`);
+    go('campus');
+  }catch(e){log(`Error: ${e.message}`,'error');toast('❌ '+e.message)}
+  finally{busy('connect',false)}
+}
+
+function doDisconnect(){
+  S.connected=false;S.courses=[];S.items=[];S.sel.clear();S.extracted='';S.analysis='';
+  document.getElementById('status-dot').classList.remove('on');
+  document.getElementById('st-txt').textContent='Desconectado';
+  document.getElementById('conn-info').style.display='none';
+  document.getElementById('disc-btn').disabled=true;
+  document.getElementById('course-sel').innerHTML='<option>— Conectate primero —</option>';
+  document.getElementById('exp-btn').disabled=true;
+  document.getElementById('ext-btn').disabled=true;
+  document.getElementById('anal-btn').disabled=true;
+  document.getElementById('ext-info').style.display='none';
+  document.getElementById('res-sec').style.display='none';
+  document.getElementById('content-list').innerHTML='<div class="empty"><div class="empty-icon">📂</div><div class="empty-text">Explorá una materia primero</div></div>';
+  log('Desconectado','warning');toast('Sesión cerrada');go('config');
+}
+
+function dType(url,name=''){
+  if(!url)return'unknown';
+  if(url.includes('/mod/forum/'))return'forum';
+  if(url.includes('/mod/hsuforum/'))return'hsuforum';
+  if(url.includes('/mod/folder/'))return'folder';
+  if(url.includes('/mod/resource/'))return'resource';
+  if(url.includes('/mod/url/'))return'url';
+  if(url.includes('/mod/page/'))return'page';
+  if(url.includes('/mod/quiz/'))return'quiz';
+  if(url.includes('/mod/assign/'))return'assign';
+  const n=name.toLowerCase();
+  if(n.includes('video')||n.includes('grabada')||n.includes('zoom'))return'video';
+  return'unknown';
+}
+const ICONS={forum:'💬',hsuforum:'💬',folder:'📁',resource:'📄',url:'🔗',page:'📃',quiz:'📝',assign:'📋',video:'🎬',section:'📂',unknown:'•'};
+const LABELS={forum:'Foro',hsuforum:'Foro HSU',folder:'Carpeta',resource:'Archivo',url:'Enlace',page:'Página',quiz:'Cuestionario',assign:'Tarea',video:'Video',section:'Sección',unknown:'Otro'};
+
+function exLinks(container){
+  const items=[],seen=new Set();
+  container.querySelectorAll('a[href*="/mod/"]').forEach(a=>{
+    const href=a.href,name=a.textContent.trim();
+    if(href&&name&&!seen.has(href)&&!href.includes('#')&&name.length>1){seen.add(href);items.push({name,url:href,type:dType(href,name)})}
+  });
+  return items;
+}
+
+async function doExplore(){
+  const sel=document.getElementById('course-sel');
+  if(!sel.value){toast('Seleccioná una materia');return}
+  const course=S.courses.find(c=>c.url===sel.value);if(!course)return;
+  busy('explore',true);document.getElementById('exp-prog').style.display='';
+  document.getElementById('exp-st').textContent='Cargando '+course.name+'...';
+  log('Explorando: '+course.name,'accent');
+  try{
+    const r=await pfetch(course.url);
+    const h=await r.text();
+    const doc=new DOMParser().parseFromString(h,'text/html');
+    const isTiles=h.includes('tile-clickable')||h.includes('format-tiles');
+    log('Formato: '+(isTiles?'mosaicos':'estándar'),'info');
+    const items=isTiles?await getTiles(course.url,doc,h):getStd(doc);
+    S.items=items;S.sel.clear();
+    renderList(items);
+    log(items.length+' elementos','success');
+    toast('✅ '+(items.filter(i=>i.type!=='section').length)+' actividades');
+    go('content');
+  }catch(e){log('Error: '+e.message,'error');toast('❌ '+e.message)}
+  finally{busy('explore',false);document.getElementById('exp-prog').style.display='none'}
+}
+
+function getStd(doc){
+  const items=[];
+  const secs=doc.querySelectorAll('li.section.main,div.course-section,li[id^="section-"]');
+  const cont=secs.length>0?secs:[doc.querySelector('#region-main')].filter(Boolean);
+  cont.forEach(sec=>{
+    const ne=sec.querySelector('h3.sectionname,.section-title,h3,.sectionname');
+    const sn=ne?ne.textContent.trim():'';
+    if(sn)items.push({name:sn,url:null,type:'section'});
+    const seen=new Set();
+    sec.querySelectorAll('a[href*="/mod/"]').forEach(a=>{
+      const href=a.href,name=a.textContent.trim();
+      if(href&&name&&!seen.has(href)&&!href.includes('#')){seen.add(href);items.push({name,url:href,type:dType(href,name)})}
+    });
+  });
+  return items;
+}
+
+async function getTiles(courseUrl,doc,html){
+  const items=[];
+  const sec0=doc.querySelector("li[data-section='0'],.section.clearfix,#section-0");
+  if(sec0){const l=exLinks(sec0);if(l.length){items.push({name:'General',url:null,type:'section'});items.push(...l)}}
+  const tiles=doc.querySelectorAll('li.tile[data-section]');
+  log(tiles.length+' tiles','info');
+  for(const tile of tiles){
+    const secNum=tile.getAttribute('data-section');
+    let name='';
+    for(const sel of['.tile-text','h3','h4','span']){const el=tile.querySelector(sel);if(el&&el.textContent.trim()){name=el.textContent.trim();break}}
+    if(!name)name='Sección '+secNum;
+    log('Cargando: '+name,'info');
+    const url=courseUrl+(courseUrl.includes('?')?'&':'?')+'section='+secNum;
     try{
-      r1=await pfetch(`${S.base}/login/index.php`);
-    }catch(e){
-      throw new Error(
-        'No se pudo conectar al campus.
-
-'+
-        'Error tecnico: '+e.message+'
-
-'+
-        (S.useProxy
-         : 'Verificá que el Worker de Cloudflare esté activo y que la URL del proxy sea correcta.')
-      );
-    }
-  } catch (e) {
-    showErr(e.message);
-    busy('connect', false);
+      const r=await pfetch(url);
+      const h=await r.text();
+      const d=new DOMParser().parseFromString(h,'text/html');
+      const sec=d.querySelector('#section-'+secNum+',li[data-section="'+secNum+'"]');
+      const links=sec?exLinks(sec):exLinks(d.querySelector('#region-main')||d.body);
+      if(links.length){items.push({name,url:null,type:'section'});items.push(...links);log('✓ '+links.length+' en '+name,'success')}
+    }catch(e){log('Error en '+name+': '+e.message,'warning')}
   }
+  return items;
 }
 
-// --- FUNCIONES DE EXPORTACIÓN Y UTILIDAD ---
+function renderList(items){
+  const list=document.getElementById('content-list');
+  if(!items.length){list.innerHTML='<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Sin contenido</div></div>';return}
+  list.innerHTML=items.map((item,i)=>{
+    if(item.type==='section')return`<div class="item sec-hdr"><span class="item-icon">${ICONS.section}</span><div class="item-body"><div class="item-name">${esc(item.name)}</div></div></div>`;
+    return`<div class="item" id="it-${i}" onclick="tog(${i})"><span class="item-icon">${ICONS[item.type]||'•'}</span><div class="item-body"><div class="item-name">${esc(item.name)}</div><div class="item-type">${LABELS[item.type]||'Otro'}</div></div><div class="check" id="ch-${i}"></div></div>`;
+  }).join('');
+  updSel();
+}
 
-function doExportWord() {
-  const content = document.getElementById('analysis-result').innerText;
-  const title = document.getElementById('analysis-title').innerText || 'Analisis_Campus';
-  const date = new Date().toLocaleString('es-AR');
-  const esc2 = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  
-  const body = content.split(/\n\n+/).map(p => {
-    const t = p.trim(); if (!t) return '';
-    if (t.startsWith('===') && t.endsWith('===')) return `<h2>${esc2(t.replace(/=/g, '').trim())}</h2>`;
-    return `<p>${esc2(t)}</p>`;
+function tog(i){
+  if(S.items[i].type==='section')return;
+  if(S.sel.has(i)){S.sel.delete(i);document.getElementById('it-'+i)?.classList.remove('selected')}
+  else{S.sel.add(i);document.getElementById('it-'+i)?.classList.add('selected')}
+  updSel();
+}
+function updSel(){
+  const n=S.sel.size;
+  document.getElementById('sel-count').textContent=n===0?'Tocá para seleccionar':n+' seleccionado(s)';
+  document.getElementById('ext-btn').disabled=n===0;
+}
+function selAll(){S.sel.clear();S.items.forEach((it,i)=>{if(it.type!=='section'){S.sel.add(i);document.getElementById('it-'+i)?.classList.add('selected')}});updSel()}
+function selForums(){S.sel.clear();S.items.forEach((it,i)=>{const f=it.type==='forum'||it.type==='hsuforum';document.getElementById('it-'+i)?.classList.toggle('selected',f);if(f)S.sel.add(i)});updSel()}
+function selNone(){S.sel.clear();document.querySelectorAll('.item.selected').forEach(el=>el.classList.remove('selected'));updSel()}
+
+async function doExtract(){
+  const sel=[...S.sel];if(!sel.length){toast('Seleccioná algo');return}
+  busy('extract',true);document.getElementById('ext-prog').style.display='';
+  log('Extrayendo '+sel.length+' elemento(s)...','accent');
+  const parts=[];
+  for(let i=0;i<sel.length;i++){
+    const item=S.items[sel[i]];
+    document.getElementById('ext-fill').style.width=Math.round(i/sel.length*100)+'%';
+    document.getElementById('ext-st').textContent=`[${i+1}/${sel.length}] ${item.name}`;
+    log(`[${i+1}/${sel.length}] ${item.name}`,'info');
+    try{const t=await extractItem(item);if(t)parts.push('=== '+item.name+' ===\n\n'+t)}
+    catch(e){log('Error en '+item.name+': '+e.message,'warning')}
+  }
+  S.extracted=parts.join('\n\n'+'─'.repeat(40)+'\n\n');
+  document.getElementById('ext-fill').style.width='100%';
+  if(parts.length){
+    document.getElementById('anal-btn').disabled=false;
+    document.getElementById('ext-info').style.display='';
+    document.getElementById('ei-sec').textContent=parts.length;
+    document.getElementById('ei-chr').textContent=S.extracted.length.toLocaleString();
+    log('Extracción completa: '+S.extracted.length.toLocaleString()+' chars','success');
+    toast('✅ '+parts.length+' sección(es)');go('analyze');
+  }else{log('Sin contenido','warning');toast('⚠️ Sin contenido')}
+  busy('extract',false);document.getElementById('ext-prog').style.display='none';
+}
+
+async function extractItem(item){
+  if(!item.url)return'';
+  const r=await pfetch(item.url);
+  const h=await r.text();
+  const doc=new DOMParser().parseFromString(h,'text/html');
+  if(item.type==='forum'||item.type==='hsuforum')return await extForum(doc,item.type);
+  if(item.type==='folder')return extFolder(doc);
+  return extPage(doc);
+}
+async function extForum(doc,type){
+  const links=[...doc.querySelectorAll(`a[href*="/mod/${type}/discuss.php"]`)].map(a=>a.href).filter((v,i,a)=>a.indexOf(v)===i);
+  log('  📌 '+links.length+' temas','info');const texts=[];
+  for(let i=0;i<Math.min(links.length,15);i++){
+    try{
+      const r=await pfetch(links[i]);
+      const h=await r.text();const d=new DOMParser().parseFromString(h,'text/html');
+      const sels=['.forumpost .posting','div[data-region="post-content"]','.post-content-container','article.forum-post-container','.forumpost'];
+      let found=false;
+      for(const s of sels){const ps=d.querySelectorAll(s);if(ps.length){ps.forEach(p=>{const t=p.textContent.trim();if(t&&t.length>15)texts.push(t)});found=true;break}}
+      if(!found){const m=d.querySelector('#region-main');if(m)texts.push(m.textContent.trim().slice(0,3000))}
+      log('  ✓ Tema '+(i+1)+'/'+Math.min(links.length,15),'info');
+    }catch(e){}
+  }
+  return texts.join('\n\n---\n\n');
+}
+function extFolder(doc){
+  const files=[...doc.querySelectorAll('.fp-filename,a[href*="pluginfile"]')].map(f=>f.textContent.trim()).filter(Boolean);
+  let t=files.length?'Archivos:\n'+files.map(f=>'• '+f).join('\n'):'';
+  for(const s of['div.box.generalbox','#intro','.activity-description']){const el=doc.querySelector(s);if(el)t+='\n\n'+el.textContent.trim()}
+  return t;
+}
+function extPage(doc){
+  for(const s of['#region-main .box.generalbox','div[role="main"]','#page-content','div.no-overflow','section#region-main']){const el=doc.querySelector(s);if(el){const t=el.textContent.trim();if(t.length>30)return t}}
+  return doc.body?doc.body.textContent.trim().slice(0,5000):'';
+}
+
+const PRESETS={
+  resumir:'Resumí los puntos principales. Identificá ideas clave y conclusiones.',
+  debate:'Analizá el foro de debate: posturas de participantes, argumentos principales y conclusiones.',
+  estudiar:'Actuá como tutor. Generá: 1) Resumen ejecutivo, 2) Conceptos clave con definición, 3) Preguntas de examen con respuestas.',
+  preguntas:'Generá 10 preguntas de estudio con respuestas, de menor a mayor dificultad.'
+};
+function pi(k){document.getElementById('inst').value=PRESETS[k]||'';toast('Instrucción cargada')}
+
+async function doAnalyze(){
+  if(!S.extracted){toast('Primero extraé contenido');return}
+  const k=document.getElementById('k').value.trim();
+  const inst=document.getElementById('inst').value.trim();
+  if(!k){toast('Ingresá tu API key en Config');go('config');return}
+  busy('analyze',true);document.getElementById('anal-prog').style.display='';
+  document.getElementById('res-sec').style.display='none';
+  log('Enviando a ChatGPT (gpt-4o-mini)...','accent');
+  try{
+    const prompt=inst+'\n\nContenido extraído del campus:\n\n'+S.extracted.slice(0,12000);
+    const r=await fetch('https://api.openai.com/v1/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},
+      body:JSON.stringify({model:'gpt-4o-mini',messages:[{role:'user',content:prompt}],max_tokens:1500,temperature:0.7})
+    });
+    if(!r.ok){const e=await r.json();throw new Error(e.error?.message||'Error '+r.status)}
+    const data=await r.json();
+    S.analysis=data.choices[0].message.content;
+    document.getElementById('result-box').textContent=S.analysis;
+    document.getElementById('res-sec').style.display='';
+    log('Análisis recibido','success');toast('✅ Análisis listo');
+  }catch(e){log('Error: '+e.message,'error');toast('❌ '+e.message)}
+  finally{busy('analyze',false);document.getElementById('anal-prog').style.display='none'}
+}
+
+function copyRes(){
+  const t=S.analysis||S.extracted;
+  if(!t){toast('No hay texto');return}
+  navigator.clipboard.writeText(t).then(()=>toast('📋 Copiado')).catch(()=>{
+    // Fallback para Android
+    const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('📋 Copiado');
+  });
+}
+
+function doExportWord(){
+  const content=S.analysis||S.extracted;
+  if(!content){toast('No hay contenido');return}
+  const sel=document.getElementById('course-sel');
+  const title=sel.selectedOptions[0]?.text||'Campus UNMA';
+  const date=new Date().toLocaleDateString('es-AR');
+  const esc2=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const body=content.split(/\n\n+/).map(p=>{
+    const t=p.trim();if(!t)return'';
+    if(t.startsWith('===')&&t.endsWith('==='))return`<h2>${esc2(t.replace(/=/g,'').trim())}</h2>`;
+    return`<p>${esc2(t)}</p>`;
   }).join('\n');
-
-  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${esc2(title)}</title><style>body{font-family:Arial,sans-serif;font-size:12pt;margin:2cm}h1{font-size:18pt;color:#1a1a2e;border-bottom:2px solid #4a90d9;padding-bottom:8px}h2{font-size:14pt;color:#4a90d9;margin-top:20px}p{line-height:1.6;margin-bottom:10px}.meta{color:#666;font-size:10pt}</style></head><body><h1>${esc2(title)}</h1><p class="meta">Generado: ${date} | Campus Bot UNMA</p>${body}</body></html>`;
-  
-  const blob = new Blob([html], { type: 'application/msword' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title.replace(/\s+/g, '_')}.doc`;
-  a.click();
-  URL.revokeObjectURL(url);
-  toast('📄 Descargando Word...');
-  log('Word exportado', 'success');
+  const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>${esc2(title)}</title><style>body{font-family:Arial,sans-serif;font-size:12pt;margin:2cm}h1{font-size:18pt;color:#1a1a2e;border-bottom:2px solid #4a90d9;padding-bottom:8px}h2{font-size:14pt;color:#4a90d9;margin-top:20px}p{line-height:1.6;margin-bottom:10px}.meta{color:#666;font-size:10pt}</style></head><body><h1>${esc2(title)}</h1><p class="meta">Generado: ${date} | Campus Bot UNMA</p>${body}</body></html>`;
+  const blob=new Blob([html],{type:'application/msword'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='CampusBot_'+title.slice(0,20).replace(/[^a-zA-Z0-9]/g,'_')+'_'+date.replace(/\//g,'')+'.doc';
+  a.click();URL.revokeObjectURL(url);
+  toast('📄 Descargando Word...');log('Word exportado','success');
 }
 
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
-// Carga inicial y activación
 loadConf();
-log('Campus Bot listo. Ingresá tus credenciales en Config.', 'accent');
-
-</script>
-</body>
-</html>
+log('Campus Bot listo. Ingresá tus credenciales en Config.','accent');
