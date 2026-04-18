@@ -325,29 +325,12 @@ function setBusy(id, on) {
 // ── Proxy fetch ──
 function pfetch(url, opts) {
   opts = opts || {};
-  if (!ST.proxy) {
-    return fetch(url, { method: opts.method || 'GET', body: opts.body || undefined, credentials: 'include', redirect: 'follow' });
-  }
-  var headers = new Headers();
-  headers.set('x-target-url', url);
-  if (ST.cookie) headers.set('x-campus-cookie', ST.cookie);
-  if (opts.body) headers.set('Content-Type', 'application/x-www-form-urlencoded');
-  return fetch(ST.proxy, {
-    method: opts.method || 'GET',
-    headers: headers,
-    body: opts.body || undefined
-  }).then(function(resp) {
-    var sc = resp.headers.get('x-set-cookie');
-    if (sc) {
-      var m = sc.match(/MoodleSession[^=]*=([^;]+)/);
-      if (m) {
-        var name = (sc.match(/(MoodleSession[^=]*)/) || ['','MoodleSession'])[1];
-        ST.cookie = name + '=' + m[1];
-        localStorage.setItem('cb_cookie', ST.cookie);
-        addLog('Cookie de sesion guardada', 'info');
-      }
-    }
-    return resp;
+
+  // 👉 usar proxy público en lugar de Cloudflare
+  var finalUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+
+  return fetch(finalUrl, {
+    method: opts.method || 'GET'
   });
 }
 
