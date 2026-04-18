@@ -242,7 +242,7 @@ nav::-webkit-scrollbar{display:none}
 // ── Estado ──
 var ST = {
   base: 'https://campus.unma.net.ar/c0',
-  proxy: '',
+  proxy: localStorage.getItem('cbp') || '',
   cookie: '',
   courses: [],
   items: [],
