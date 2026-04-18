@@ -1,82 +1,67 @@
-/**
- * Cloudflare Worker — Proxy CORS para Campus Bot UNMA
- * Deployment: workers.cloudflare.com (gratis)
- */
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request))
+})
 
-const ALLOWED_ORIGINS = [
-  'https://5esquinas.github.io',   // cambiá por tu usuario de GitHub
-  'http://localhost:8080',
-  'http://127.0.0.1:8080',
-];
-
-const ALLOWED_HOSTS = [
-  'campus.unma.net.ar',
-];
-
-export default {
-  async fetch(request, env) {
-    const origin = request.headers.get('Origin') || '';
-
-    // OPTIONS preflight
-    if (request.method === 'OPTIONS') {
-      return corsResponse(new Response(null, { status: 204 }), origin);
-    }
-
-    // Leer la URL destino del header x-target-url
-    const targetUrl = request.headers.get('x-target-url');
-    if (!targetUrl) {
-      return corsResponse(new Response('Missing x-target-url header', { status: 400 }), origin);
-    }
-
-    // Validar que sea del campus
-    let url;
-    try { url = new URL(targetUrl); } catch {
-      return corsResponse(new Response('Invalid URL', { status: 400 }), origin);
-    }
-    if (!ALLOWED_HOSTS.includes(url.hostname)) {
-      return corsResponse(new Response('Host not allowed', { status: 403 }), origin);
-    }
-
-    // Reenviar la request al campus
-    const headers = new Headers(request.headers);
-    headers.delete('x-target-url');
-    headers.delete('origin');
-    headers.delete('host');
-
-    // Pasar cookies de sesión si vienen
-    const cookie = request.headers.get('x-campus-cookie');
-    if (cookie) headers.set('Cookie', cookie);
-
-    try {
-      const response = await fetch(targetUrl, {
-        method:  request.method,
-        headers: headers,
-        body:    request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
-        redirect: 'follow',
-      });
-
-      const respHeaders = new Headers(response.headers);
-      // Exponer Set-Cookie para que el cliente pueda leerlo
-      const setCookie = response.headers.get('set-cookie');
-      if (setCookie) respHeaders.set('x-set-cookie', setCookie);
-
-      const newResp = new Response(response.body, {
-        status:  response.status,
-        headers: respHeaders,
-      });
-      return corsResponse(newResp, origin);
-    } catch (e) {
-      return corsResponse(new Response('Proxy error: ' + e.message, { status: 502 }), origin);
-    }
+async function handleRequest(request) {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders() })
   }
-};
 
-function corsResponse(resp, origin) {
-  const h = new Headers(resp.headers);
-  h.set('Access-Control-Allow-Origin', ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]);
-  h.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  h.set('Access-Control-Allow-Headers', 'Content-Type, x-target-url, x-campus-cookie');
-  h.set('Access-Control-Expose-Headers', 'x-set-cookie');
-  h.set('Access-Control-Allow-Credentials', 'true');
-  return new Response(resp.body, { status: resp.status, headers: h });
+  const targetUrl = request.headers.get('x-target-url')
+  if (!targetUrl) {
+    return new Response('Falta x-target-url', { status: 400, headers: corsHeaders() })
+  }
+
+  if (!targetUrl.includes('campus.unma.net.ar')) {
+    return new Response('URL no permitida', { status: 403, headers: corsHeaders() })
+  }
+
+  const reqHeaders = new Headers()
+  reqHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+  reqHeaders.set('Accept', 'text/html,application/xhtml+xml,*/*')
+  reqHeaders.set('Accept-Language', 'es-AR,es;q=0.9')
+
+  const ct = request.headers.get('Content-Type')
+  if (ct) reqHeaders.set('Content-Type', ct)
+
+  const cookie = request.headers.get('x-campus-cookie')
+  if (cookie) reqHeaders.set('Cookie', cookie)
+
+  let body = null
+  if (request.method === 'POST') {
+    body = await request.text()
+  }
+
+  let response
+  try {
+    response = await fetch(targetUrl, {
+      method: request.method,
+      headers: reqHeaders,
+      body: body,
+      redirect: 'follow'
+    })
+  } catch (e) {
+    return new Response('Error: ' + e.message, { status: 502, headers: corsHeaders() })
+  }
+
+  const respBody = await response.text()
+  const respHeaders = corsHeaders()
+  respHeaders.set('Content-Type', response.headers.get('Content-Type') || 'text/html; charset=utf-8')
+
+  const setCookie = response.headers.get('set-cookie')
+  if (setCookie) {
+    respHeaders.set('x-set-cookie', setCookie)
+  }
+
+  return new Response(respBody, { status: response.status, headers: respHeaders })
+}
+
+function corsHeaders() {
+  return new Headers({
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, x-target-url, x-campus-cookie',
+    'Access-Control-Expose-Headers': 'x-set-cookie',
+    'Access-Control-Max-Age': '86400'
+  })
 }
