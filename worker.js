@@ -4,7 +4,7 @@
  */
 
 const ALLOWED_ORIGINS = [
-  'https://5esquinas.github.io',   // cambiá por tu usuario de GitHub
+  'https://tegralan.github.io',   // cambiá por tu usuario de GitHub
   'http://localhost:8080',
   'http://127.0.0.1:8080',
 ];

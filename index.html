@@ -139,6 +139,11 @@ nav::-webkit-scrollbar{display:none}
     </button>
     <button class="btn btn-red" id="disc-btn" onclick="doDisconnect()" disabled>Salir</button>
   </div>
+  <div id="err-box" style="display:none;background:#1a0a0a;border:1px solid var(--red);border-radius:var(--r-sm);padding:14px;margin-top:4px">
+    <div style="font-size:11px;color:var(--red);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">❌ Error de conexión</div>
+    <div id="err-msg" style="font-family:var(--mono);font-size:12px;color:#fca5a5;line-height:1.7;white-space:pre-wrap;word-break:break-all"></div>
+    <div style="margin-top:10px;font-size:11px;color:var(--text2)">Tocá el ícono 📝 Log para ver el detalle completo.</div>
+  </div>
   <div class="card" id="conn-info" style="display:none">
     <div class="card-title">✅ Conectado</div>
     <div class="info-row"><span class="lbl">Usuario</span><span id="inf-u">—</span></div>
@@ -313,41 +318,135 @@ function busy(id,on){
 }
 
 // ── Moodle ──
+function showErr(msg){
+  document.getElementById('err-box').style.display='';
+  document.getElementById('err-msg').textContent=msg;
+}
+function hideErr(){document.getElementById('err-box').style.display='none'}
+
 async function doConnect(){
-  const u=document.getElementById('u').value.trim(),p=document.getElementById('p').value,k=document.getElementById('k').value.trim();
-  if(!u||!p){toast('Ingresá usuario y contraseña');return}
-  if(!k){toast('Ingresá tu API key de OpenAI');return}
-  const px=document.getElementById('proxy').value.trim();
-  if(px){S.proxy=px;localStorage.setItem('cbp',px);}
-  if(!S.proxy||S.proxy.includes('TU-USUARIO')){
-    toast('⚠️ Configurá la URL del proxy primero');
-    // Try direct (may fail due to CORS)
-    S.useProxy=false;
-    log('Intentando conexión directa (puede fallar por CORS)...','warning');
+  hideErr();
+  const u=document.getElementById('u').value.trim();
+  const p=document.getElementById('p').value;
+  const k=document.getElementById('k').value.trim();
+  const proxyInput=document.getElementById('proxy').value.trim();
+
+  if(!u||!p){showErr('Falta usuario o contrasena.');return}
+  if(!k){showErr('Falta la API key de OpenAI.');return}
+
+  if(proxyInput&&!proxyInput.includes('TU-USUARIO')){
+    S.proxy=proxyInput;S.useProxy=true;
+    localStorage.setItem('cbp',proxyInput);
+    log('Proxy configurado: '+proxyInput,'info');
   } else {
-    S.useProxy=true;
+    S.useProxy=false;
+    log('Sin proxy - intento directo (puede fallar por CORS)','warning');
   }
-  busy('connect',true);log('Conectando al campus...','accent');
+
+  busy('connect',true);
+  log('=== Iniciando conexion ===','accent');
+
   try{
-    // login
-    const r1=await pfetch(`${S.base}/login/index.php`);
+    // PASO 1: Login page
+    log('Paso 1/3: Obteniendo pagina de login...','info');
+    let r1;
+    try{
+      r1=await pfetch(`${S.base}/login/index.php`);
+    }catch(e){
+      throw new Error(
+        'No se pudo conectar al campus.
+
+'+
+        'Error tecnico: '+e.message+'
+
+'+
+        (S.useProxy
+          ? 'Verificá que el Worker de Cloudflare este activo
+y que la URL del proxy sea correcta.'
+          : 'Sin proxy configurado - el campus puede bloquear
+la conexion directa desde el celular.')
+      );
+    }
+    log('Respuesta del campus: HTTP '+r1.status,'info');
+    if(!r1.ok) throw new Error('El campus respondio con error HTTP '+r1.status);
     const h1=await r1.text();
+    if(!h1||h1.length<50) throw new Error('Respuesta vacia del campus.
+El proxy puede no estar funcionando.');
+    log('Pagina de login recibida ('+h1.length+' chars)','success');
+
     const tm=h1.match(/name="logintoken"\s+value="([^"]+)"/);
     const tok=tm?tm[1]:'';
+    log('Login token: '+(tok?'OK':'no encontrado'),'info');
+
+    // PASO 2: POST login
+    log('Paso 2/3: Enviando credenciales...','info');
     const body=new URLSearchParams({username:u,password:p,logintoken:tok,anchor:''});
-    const r2=await pfetch(`${S.base}/login/index.php`,{method:'POST',body:body.toString()});
+    let r2;
+    try{
+      r2=await pfetch(`${S.base}/login/index.php`,{method:'POST',body:body.toString()});
+    }catch(e){
+      throw new Error('Error al enviar credenciales:
+'+e.message);
+    }
+    log('Login POST: HTTP '+r2.status,'info');
     const h2=await r2.text();
-    if(h2.includes('loginerrors')||h2.includes('error-invalidlogin'))throw new Error('Credenciales incorrectas');
-    log('Sesión iniciada','success');
-    // cursos
-    const r3=await pfetch(`${S.base}/my/`);
+    log('Respuesta login ('+h2.length+' chars)','info');
+
+    if(h2.includes('loginerrors')||h2.includes('error-invalidlogin')||h2.includes('invalidlogin')){
+      throw new Error('Credenciales incorrectas.
+Verifica tu usuario y contrasena del campus UNMA.');
+    }
+    if(h2.includes('id="loginbtn"')){
+      log('HTML snippet: '+h2.slice(0,300),'warning');
+      throw new Error('El login no se completo.
+El campus puede requerir verificacion adicional
+o el proxy no esta pasando las cookies correctamente.');
+    }
+    log('Login exitoso','success');
+
+    // PASO 3: cursos
+    log('Paso 3/3: Cargando materias...','info');
+    let r3;
+    try{
+      r3=await pfetch(`${S.base}/my/`);
+    }catch(e){
+      throw new Error('Error al cargar el dashboard:
+'+e.message);
+    }
+    log('Dashboard: HTTP '+r3.status,'info');
     const h3=await r3.text();
+    log('Dashboard recibido ('+h3.length+' chars)','info');
+
     const doc=new DOMParser().parseFromString(h3,'text/html');
     const links=doc.querySelectorAll('a[href*="/course/view.php"]');
     S.courses=[];const seen=new Set();
-    links.forEach(a=>{const href=a.href,name=a.textContent.trim();if(href&&name&&!seen.has(href)&&name.length>2){seen.add(href);S.courses.push({name,url:href})}});
+    links.forEach(a=>{
+      const href=a.href,name=a.textContent.trim();
+      if(href&&name&&!seen.has(href)&&name.length>2){seen.add(href);S.courses.push({name,url:href})}
+    });
+    log(S.courses.length+' materias encontradas','success');
+
+    if(S.courses.length===0){
+      log('Primeros 500 chars del dashboard:
+'+h3.slice(0,500),'warning');
+      throw new Error(
+        'No se encontraron materias.
+
+'+
+        'Posibles causas:
+'+
+        '• El login no se completo (cookies no guardadas)
+'+
+        '• El proxy no pasa la sesion correctamente
+'+
+        '• El campus cambio su estructura
+
+'+
+        'Revisa el tab Log para mas detalles.'
+      );
+    }
+
     S.connected=true;saveConf();
-    // UI
     document.getElementById('status-dot').classList.add('on');
     document.getElementById('st-txt').textContent=u;
     document.getElementById('conn-info').style.display='';
@@ -357,11 +456,17 @@ async function doConnect(){
     const sel=document.getElementById('course-sel');
     sel.innerHTML=S.courses.map(c=>`<option value="${esc(c.url)}">${esc(c.name)}</option>`).join('');
     document.getElementById('exp-btn').disabled=false;
-    log(`${S.courses.length} materias encontradas`,'success');
-    toast(`✅ ${S.courses.length} materias`);
+    hideErr();
+    toast('Conectado - '+S.courses.length+' materias');
     go('campus');
-  }catch(e){log(`Error: ${e.message}`,'error');toast('❌ '+e.message)}
-  finally{busy('connect',false)}
+
+  }catch(e){
+    log('ERROR: '+e.message,'error');
+    showErr(e.message);
+    toast('Error - revisa el panel rojo');
+  }finally{
+    busy('connect',false);
+  }
 }
 
 function doDisconnect(){
@@ -619,24 +724,9 @@ function doExportWord(){
   a.href=url;a.download='CampusBot_'+title.slice(0,20).replace(/[^a-zA-Z0-9]/g,'_')+'_'+date.replace(/\//g,'')+'.doc';
   a.click();URL.revokeObjectURL(url);
   toast('📄 Descargando Word...');log('Word exportado','success');
-  }
-
-  function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  loadConf();
-  log('Campus Bot listo. Ingresá tus credenciales en Config.', 'accent');
-</script>
-</body>
-</html>
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
 loadConf();
 log('Campus Bot listo. Ingresá tus credenciales en Config.','accent');
-  
-</script> 
-</body>
-</html>
